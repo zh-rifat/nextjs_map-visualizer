@@ -63,6 +63,7 @@ export default async function MapPage() {
     id: String(idx),
     coordinates: row.coordinates,
     color: colorFor(colorMap, row.data["Profession"], FALLBACK_COLOR),
+    profession: (row.data["Profession"] ?? "").trim(),
     data: row.data,
   }));
 
@@ -82,6 +83,9 @@ export default async function MapPage() {
   }));
 
   const bounds = computeBounds(mapped.map((r) => r.coordinates));
+
+  // Headers for the data columns — used by the raw-data table below the map.
+  const dataColHeaders = Object.keys(mapped[0].data);
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-12">
@@ -104,18 +108,42 @@ export default async function MapPage() {
         <summary className="cursor-pointer text-sm text-zinc-600 dark:text-zinc-400">
           Show raw data ({mapped.length} {mapped.length === 1 ? "row" : "rows"})
         </summary>
-        <div className="mt-4 overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+        {/* Horizontally scrollable table.
+            - Wrapper uses `contain: inline-size` to isolate its width from
+              its content's intrinsic size. Without this, the table's
+              intrinsic min-content (sum of `min-w-[X]` per cell) could push
+              the wrapper wider, which would in turn push `<main>` wider and
+              change the map's width above.
+            - `overflow-x: auto` + `max-w-full` + `min-w-0` then provide a
+              local scrollbar inside the wrapper, leaving the surrounding
+              layout untouched.
+            - Each cell keeps `min-w-[X]` so the table can grow to the width
+              its content needs, scrolling horizontally inside the wrapper. */}
+        <div
+          className="mt-4 max-w-full overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800"
+          style={{ contain: "inline-size" }}
+        >
           <table className="w-full text-left text-sm">
             <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
               <tr>
-                <th scope="col" className="min-w-[6rem] max-w-[12rem] break-words px-3 py-2 font-medium">
+                <th
+                  scope="col"
+                  className="min-w-[6rem] whitespace-nowrap px-3 py-2 font-medium"
+                >
                   lat
                 </th>
-                <th scope="col" className="min-w-[6rem] max-w-[12rem] break-words px-3 py-2 font-medium">
+                <th
+                  scope="col"
+                  className="min-w-[6rem] whitespace-nowrap px-3 py-2 font-medium"
+                >
                   lng
                 </th>
-                {Object.keys(mapped[0].data).map((h) => (
-                  <th key={h} scope="col" className="min-w-[8rem] max-w-[20rem] break-words px-3 py-2 font-medium">
+                {dataColHeaders.map((h) => (
+                  <th
+                    key={h}
+                    scope="col"
+                    className="min-w-[12rem] whitespace-nowrap px-3 py-2 font-medium"
+                  >
                     {h}
                   </th>
                 ))}
@@ -127,14 +155,17 @@ export default async function MapPage() {
                   key={idx}
                   className="bg-white dark:bg-zinc-950"
                 >
-                  <td className="min-w-[6rem] max-w-[12rem] break-words px-3 py-2 font-mono text-xs">
+                  <td className="min-w-[6rem] whitespace-nowrap px-3 py-2 font-mono text-xs">
                     {row.coordinates.lat}
                   </td>
-                  <td className="min-w-[6rem] max-w-[12rem] break-words px-3 py-2 font-mono text-xs">
+                  <td className="min-w-[6rem] whitespace-nowrap px-3 py-2 font-mono text-xs">
                     {row.coordinates.lng}
                   </td>
                   {Object.values(row.data).map((v, i) => (
-                    <td key={i} className="min-w-[8rem] max-w-[20rem] break-words px-3 py-2 align-top text-zinc-800 dark:text-zinc-200">
+                    <td
+                      key={i}
+                      className="min-w-[12rem] whitespace-nowrap px-3 py-2 align-top text-zinc-800 dark:text-zinc-200"
+                    >
                       {v}
                     </td>
                   ))}

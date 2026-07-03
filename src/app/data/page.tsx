@@ -82,7 +82,11 @@ export default async function DataPage() {
                 dateTime={new Date(cachedAt).toISOString()}
                 className="font-mono text-xs"
               >
-                {new Date(cachedAt).toLocaleTimeString()}
+                {/* Use a locale-independent UTC string so server and client
+                    produce identical output (toLocaleTimeString() would use
+                    the server locale during SSR and the client locale at
+                    hydration, causing a hydration mismatch). */}
+                {formatCachedTime(cachedAt)}
               </time>
             </>
           ) : null}
@@ -94,7 +98,17 @@ export default async function DataPage() {
           No data rows found. The sheet has a header row but no data underneath.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+        /* Horizontally scrollable table.
+           - `contain: inline-size` isolates the wrapper's width from its
+             content's intrinsic size. Without it, the table's intrinsic
+             min-content (sum of `min-w-[12rem]` per cell) could push the
+             wrapper wider, propagating up to `<main>` and the page itself.
+           - `overflow-x: auto` + `max-w-full` then provide a local scrollbar
+             inside the wrapper, leaving the surrounding layout untouched. */
+        <div
+          className="mt-4 max-w-full overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800"
+          style={{ contain: "inline-size" }}
+        >
           <table className="w-full text-left text-sm">
             <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
               <tr>
@@ -102,7 +116,7 @@ export default async function DataPage() {
                   <th
                     key={`${h}-${idx}`}
                     scope="col"
-                    className="min-w-[8rem] max-w-[20rem] break-words px-4 py-3 font-medium"
+                    className="min-w-[12rem] whitespace-nowrap px-4 py-3 font-medium"
                   >
                     {h}
                   </th>
@@ -118,7 +132,7 @@ export default async function DataPage() {
                   {headers.map((h, colIdx) => (
                     <td
                       key={`${rowIdx}-${h}-${colIdx}`}
-                      className="min-w-[8rem] max-w-[20rem] break-words px-4 py-3 align-top text-zinc-800 dark:text-zinc-200"
+                      className="min-w-[12rem] whitespace-nowrap px-4 py-3 align-top text-zinc-800 dark:text-zinc-200"
                     >
                       {row[h] ?? ""}
                     </td>
@@ -131,4 +145,21 @@ export default async function DataPage() {
       )}
     </main>
   );
+}
+
+/**
+ * Format an epoch-ms timestamp as a locale-independent "HH:MM:SS UTC" string.
+ *
+ * Intentionally avoids `Date.prototype.toLocaleTimeString()` because that
+ * would use the server's locale during SSR and the client's locale during
+ * hydration, producing two different strings and a React hydration mismatch.
+ *
+ * Example: 1700000000000 → "22:13:20 UTC"
+ */
+function formatCachedTime(epochMs: number): string {
+  const d = new Date(epochMs);
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const ss = String(d.getUTCSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss} UTC`;
 }

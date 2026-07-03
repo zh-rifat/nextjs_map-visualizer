@@ -11,6 +11,13 @@ export type MapMarker = {
   /** Hex color for this marker's pin, derived from the row's Profession. */
   color: string;
   /**
+   * The marker row's Profession value (the same key the Legend is keyed by).
+   * Empty string when the row has no Profession. Used for legend-based
+   * filtering — the marker is visible iff this value is in the selected
+   * professions set, OR the selected professions set is empty.
+   */
+  profession: string;
+  /**
    * The rest of the row, in display order. Server-side strings, safe to
    * render in React.
    */
@@ -42,9 +49,10 @@ type LeafletMap = { remove: () => void; invalidateSize: () => void };
  * - One marker per row, colored by Profession.
  * - Clicking a marker opens a **bottom sheet** (mobile) / **side panel**
  *   (desktop) showing the rest of the row. No Leaflet popup is used.
- * - A legend above the map shows the color → profession mapping with the
- *   number of markers per profession. Clicking a legend item highlights /
- *   zooms to those markers.
+ * - A legend above the map shows the color → profession mapping. Clicking
+ *   one or more legend items filters the map to show only markers whose
+ *   Profession is in the selected set. When the set is empty, all markers
+ *   are shown.
  *
  * SSR notes:
  *   - Leaflet touches `window` at module evaluation, so we MUST NOT import it
@@ -58,10 +66,21 @@ type LeafletMap = { remove: () => void; invalidateSize: () => void };
 export default function MapClient({ markers, legend }: MapClientProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
-  const leafletMarkersRef = useRef<unknown[]>([]);
+  // Each entry: { marker: LeafletMarker, profession: string, coords: LatLng }.
+  // We keep this around so the filter effect can toggle visibility without
+  // rebuilding the whole map.
+  type StoredMarker = {
+    marker: { addTo: (m: unknown) => void; removeFrom: (m: unknown) => void };
+    profession: string;
+    coords: LatLng;
+  };
+  const storedMarkersRef = useRef<StoredMarker[]>([]);
+  // Re-use the existing `mapRef` for Leaflet map handle.
 
   const [selectedMarkerId, setSelectedMarkerId] = useState<string | null>(null);
-  const [highlightProfession, setHighlightProfession] = useState<string | null>(null);
+  const [selectedProfessions, setSelectedProfessions] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   // Find the currently selected marker (if any) — used by the bottom sheet.
   const selected = useMemo(
@@ -113,16 +132,22 @@ export default function MapClient({ markers, legend }: MapClientProps) {
         maxZoom: 19,
       }).addTo(map);
 
-      // Build markers — one custom-icon marker per row.
-      const leafletMarkers: unknown[] = [];
+      // Build markers — one custom-icon marker per row. Store the profession
+      // alongside the marker so the filter effect can toggle visibility
+      // without rebuilding the map.
+      const stored: StoredMarker[] = [];
       for (const m of markers) {
         const icon = buildColoredIcon(L, m.color);
         const marker = L.marker([m.coordinates.lat, m.coordinates.lng], { icon });
         marker.addTo(map);
         marker.on("click", () => setSelectedMarkerId(m.id));
-        leafletMarkers.push(marker);
+        stored.push({
+          marker: marker as unknown as StoredMarker["marker"],
+          profession: m.profession,
+          coords: m.coordinates,
+        });
       }
-      leafletMarkersRef.current = leafletMarkers;
+      storedMarkersRef.current = stored;
 
       // Fit bounds to all markers (or center on the single one).
       if (markers.length > 0) {
@@ -154,30 +179,80 @@ export default function MapClient({ markers, legend }: MapClientProps) {
       const map = mapRef.current as unknown as { __cleanup__?: () => void } | null;
       if (map?.__cleanup__) map.__cleanup__();
       mapRef.current = null;
-      leafletMarkersRef.current = [];
+      storedMarkersRef.current = [];
     };
     // markers is intentionally the dep — when the underlying data changes
     // (sheet refreshed), the map is rebuilt with new markers.
   }, [markers]);
+
+  // Filter effect: when the selected-professions set changes, toggle each
+  // stored marker's visibility on the map. Empty set = show all. Non-empty
+  // set = show only matching professions.
+  useEffect(() => {
+    const map = mapRef.current as unknown as { fitBounds: (b: unknown, opts?: unknown) => void; setView: (c: [number, number], z: number) => void; invalidateSize: () => void } | null;
+    if (!map) return;
+
+    const stored = storedMarkersRef.current;
+    if (stored.length === 0) return;
+
+    const showAll = selectedProfessions.size === 0;
+    const visibleCoords: LatLng[] = [];
+
+    for (const s of stored) {
+      const shouldShow = showAll || selectedProfessions.has(s.profession);
+      if (shouldShow) {
+        // addTo() is a no-op when the marker is already on the map.
+        s.marker.addTo(map);
+        visibleCoords.push(s.coords);
+      } else {
+        s.marker.removeFrom(map);
+      }
+    }
+
+    // Re-fit to the visible set so the user sees the filtered markers.
+    if (visibleCoords.length === 0) {
+      // Nothing matches — leave the view alone so the user isn't teleported.
+      return;
+    }
+    if (visibleCoords.length === 1) {
+      map.setView([visibleCoords[0].lat, visibleCoords[0].lng], 13);
+    } else {
+      // Lazy-load leaflet just for the bounds call. This is cheap; the
+      // module is already cached from the marker-build effect.
+      void import("leaflet").then((L) => {
+        const bounds = L.latLngBounds(
+          visibleCoords.map((c) => [c.lat, c.lng]),
+        );
+        map.fitBounds(bounds, { padding: [40, 40] });
+      });
+    }
+  }, [selectedProfessions]);
 
   return (
     <div className="relative">
       {legend.length > 0 ? (
         <Legend
           entries={legend}
-          highlightProfession={highlightProfession}
-          onHover={setHighlightProfession}
-          onClick={(profession) => {
-            // Toggle: clicking the active profession clears the filter.
-            setHighlightProfession((prev) => (prev === profession ? null : profession));
+          selectedProfessions={selectedProfessions}
+          onToggle={(profession) => {
+            setSelectedProfessions((prev) => {
+              const next = new Set(prev);
+              if (next.has(profession)) {
+                next.delete(profession);
+              } else {
+                next.add(profession);
+              }
+              return next;
+            });
           }}
+          onClear={() => setSelectedProfessions(new Set())}
         />
       ) : null}
 
-      <div className="relative">
+      <div className="relative w-full max-w-full">
         <div
           ref={containerRef}
-          className="h-[80vh] min-h-[520px] w-full rounded-lg border border-zinc-200 dark:border-zinc-800"
+          className="h-[80vh] min-h-[520px] w-full max-w-full rounded-lg border border-zinc-200 dark:border-zinc-800"
           aria-label="Map of valid sheet coordinates"
         />
 
@@ -300,37 +375,41 @@ function BottomSheet({
 }
 
 // -----------------------------------------------------------------------------
-// Legend — color swatches with profession names and counts. Hovering or
-// clicking a row emphasizes that profession.
+// Legend — multi-select filter for the map. Click a profession to add/remove
+// it from the active set; an empty set means "show everything". A "Clear"
+// button appears whenever at least one profession is selected.
 // -----------------------------------------------------------------------------
 
 function Legend({
   entries,
-  highlightProfession,
-  onHover,
-  onClick,
+  selectedProfessions,
+  onToggle,
+  onClear,
 }: {
   entries: readonly LegendEntry[];
-  highlightProfession: string | null;
-  onHover: (profession: string | null) => void;
-  onClick: (profession: string) => void;
+  selectedProfessions: Set<string>;
+  onToggle: (profession: string) => void;
+  onClear: () => void;
 }) {
+  const hasSelection = selectedProfessions.size > 0;
+
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white p-3 text-sm dark:border-zinc-800 dark:bg-zinc-900">
       <span className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
         Profession
+        {hasSelection ? (
+          <span className="ml-2 normal-case tracking-normal text-zinc-500 dark:text-zinc-400">
+            ({selectedProfessions.size} selected · map filtered)
+          </span>
+        ) : null}
       </span>
       {entries.map((entry) => {
-        const active = highlightProfession === entry.profession;
+        const active = selectedProfessions.has(entry.profession);
         return (
           <button
             key={entry.profession}
             type="button"
-            onMouseEnter={() => onHover(entry.profession)}
-            onMouseLeave={() => onHover(null)}
-            onFocus={() => onHover(entry.profession)}
-            onBlur={() => onHover(null)}
-            onClick={() => onClick(entry.profession)}
+            onClick={() => onToggle(entry.profession)}
             className={[
               "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs transition",
               active
@@ -358,6 +437,15 @@ function Legend({
           </button>
         );
       })}
+      {hasSelection ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="ml-auto rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs text-zinc-700 hover:border-zinc-400 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-white"
+        >
+          Clear filter
+        </button>
+      ) : null}
     </div>
   );
 }

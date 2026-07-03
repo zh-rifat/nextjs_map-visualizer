@@ -24,3 +24,15 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/*
+ * Clip the page-level horizontal scroll. Anything inside <main> that escapes
+ * its wrapper (long tables, wide flex children, etc.) becomes scrollable
+ * within its own container instead of pushing the page wider.
+ * `overflow-x: clip` is preferred over `hidden` because it doesn't create a
+ * new scroll container — just clips overflow.
+ */
+html,
+body {
+  overflow-x: clip;
+}
